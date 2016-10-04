@@ -1,0 +1,88 @@
+Index: resources/index.html
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- resources/index.html	(date 1470723612000)
++++ resources/index.html	(revision )
+@@ -1,7 +1,7 @@
+ <html>
+ <header>
+     <style type="text/css">
+-        #exitButton {
++        #closeButton {
+             background: darkslategray;
+             height: 30px;
+             box-sizing: content-box;
+@@ -92,16 +92,17 @@
+     });
+ 
+     function exit() {
+-        console.log("tt");
++        console.log("close");
+         sock.send(JSON.stringify({
+-            type: "data",
+-            "data": "exit\n"
++            type: "close",
++//            "data": "exit\n"
++            "data": "close processes"
+         }));
+     }
+ </script>
+ 
+ <div id="sendExit">
+-    <input id="exitButton" type="button" style="background: darkslategray" value="Exit" onclick="exit();">
++    <input id="closeButton" type="button" style="background: darkslategray" value="Close" onclick="exit();">
+ </div>
+ </body>
+ </html>
+\ No newline at end of file
+Index: GoTerminal.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- GoTerminal.go	(date 1470723612000)
++++ GoTerminal.go	(revision )
+@@ -13,6 +13,7 @@
+ 	"bufio"
+ 	"bytes"
+ 	"unicode/utf8"
++	"fmt"
+ )
+ 
+ var addrFlag, cmdFlag, staticFlag string
+@@ -64,6 +65,7 @@
+ 	// copy everything from the pty master to the websocket
+ 	// using base64 encoding for now due to limitations in term.js
+ 	go func() {
++
+ 		handleError := func(msg string, err error) {
+ 			wp.Stop()
+ 			log.Printf(msg, err)
+@@ -158,6 +160,15 @@
+ 					wp.Pty.Write([]byte(dat));
+ 				}
+ 
++			case "close" :
++				var closeCmd string
++				err := json.Unmarshal(msg.Data, &closeCmd)
++				if err != nil {
++					log.Printf("Failed to correct close terminal processes %s\n", err)
++				} else {
++					conn.Close()
++					break
++				}
+ 			default:
+ 				log.Printf("Invalid message type %d\n", mt)
+ 				return
+@@ -168,7 +179,7 @@
+ 			return
+ 		}
+ 	}
+-
++	fmt.Println("++++++++=")
+ 	wp.Stop()
+ }
+ 
+\ No newline at end of file
