@@ -33,6 +33,8 @@ import (
 	"bufio"
 	"bytes"
 	"unicode/utf8"
+	"fmt"
+	"io/ioutil"
 	"syscall"
 )
 
@@ -77,10 +79,11 @@ func StartPty() (*wsPty, error) {
 }
 
 func (wp *wsPty) Stop() {
-	wp.PtyFile.Close();
+	//wp.PtyFile.Close();//todo maybe move that down
 	//kill parent process, but not children processes
 	syscall.Kill(wp.Cmd.Process.Pid, syscall.SIGBUS)
 	wp.Cmd.Wait()
+	fmt.Println("process stopped")
 }
 
 func isNormalWsError(err error) bool {
@@ -105,34 +108,52 @@ func isNormalPtyError(err error) bool {
 
 // read from the web socket, copying to the pty master
 // messages are expected to be text and base64 encoded
-func sendConnectionInputToPty(f *os.File, conn *websocket.Conn, done chan bool) {
-	defer func() { done <- true }()
+func sendConnectionInputToPty(conn *websocket.Conn, reader io.ReadCloser, f *os.File, done chan bool) {
+	defer fmt.Println("write completed")
+	routineDone := false
 	for {
-		mt, payload, err := conn.ReadMessage()
-		if err != nil {
-			if !isNormalWsError(err) {
-				log.Printf("conn.ReadMessage failed: %s\n", err)
-			}
+		select {
+		case <- done:
+			close(done)
 			return
-		}
-		switch mt {
-		case websocket.BinaryMessage:
-			log.Printf("Ignoring binary message: %q\n", payload)
-		case websocket.TextMessage:
-			var msg WebSocketMessage
-			if err := json.Unmarshal(payload, &msg); err != nil {
-				log.Printf("Invalid message %s\n", err)
-				continue
-			}
-			if errMsg := handleMessage(msg, f); errMsg != nil {
-				log.Printf(errMsg.Error())
+		default:
+			if routineDone {
+				closeReader(reader, f)
+				fmt.Println("writer actually here")
+				done <- true
+				fmt.Println("writer actually here2")
 				return
 			}
+			mt, payload, err := conn.ReadMessage()
+			if err != nil {
+				if !isNormalWsError(err) {
+					log.Printf("conn.ReadMessage failed: %s\n", err)
+				}
+				routineDone = true
+				continue
+			}
+			switch mt {
+			case websocket.BinaryMessage:
+				log.Printf("Ignoring binary message: %q\n", payload)
+			case websocket.TextMessage:
+				var msg WebSocketMessage
+				if err := json.Unmarshal(payload, &msg); err != nil {
+					log.Printf("Invalid message %s\n", err)
+					continue
+				}
+				if errMsg := handleMessage(msg, f); errMsg != nil {
+					log.Printf(errMsg.Error())
+					routineDone = true
+					continue
+				}
 
-		default:
-			log.Printf("Invalid websocket message type %d\n", mt)
-			return
+			default:
+				log.Printf("Invalid websocket message type %d\n", mt)
+				routineDone = true
+				continue
+			}
 		}
+
 	}
 }
 
@@ -185,32 +206,53 @@ func normalizeBuffer(normalizedBuf *bytes.Buffer, buf []byte, n int) (int, error
 
 // copy everything from the pty master to the websocket
 // using base64 encoding for now due to limitations in term.js
-func sendPtyOutputToConnection(f *os.File, conn *websocket.Conn, done chan bool) {
-	defer func() { done <- true; }()
+func sendPtyOutputToConnection(conn *websocket.Conn, reader io.ReadCloser, done chan bool) {
+	defer fmt.Println("read completed")
+
+	routineDone := false
 	buf := make([]byte, 8192)
-	reader := bufio.NewReader(f)
 	var buffer bytes.Buffer
+
 	// TODO: more graceful exit on socket close / process exit
-	for {
-		n, err := reader.Read(buf)
-		if err != nil {
-			if !isNormalPtyError(err) {
-				log.Printf("Failed to read from pty: %s", err)
+	for  {
+		select {
+		case <- done:
+			close(done)
+			return
+		default:
+			if routineDone {
+				fmt.Println("here")
+				conn.Close()
+				done <- true;
+				fmt.Println("here2")
+				return
 			}
-			return
-		}
-		i, err := normalizeBuffer(&buffer, buf, n)
-		if err != nil {
-			log.Printf("Cound't normalize byte buffer to UTF-8 sequence, due to an error: %s", err.Error())
-			return
-		}
-		if err = conn.WriteMessage(websocket.TextMessage, buffer.Bytes()); err != nil {
-			log.Printf("Failed to send websocket message: %s, due to occurred error %s", string(buffer.Bytes()), err.Error())
-			return
-		}
-		buffer.Reset()
-		if i < n {
-			buffer.Write(buf[i:n])
+			fmt.Println("*1")
+			n, err := reader.Read(buf)
+			fmt.Println("*2")
+			if err != nil {
+				if !isNormalPtyError(err) {
+					log.Printf("Failed to read from pty: %s", err)
+				}
+				routineDone = true
+				continue
+			}
+
+			i, err := normalizeBuffer(&buffer, buf, n)
+			if err != nil {
+				log.Printf("Cound't normalize byte buffer to UTF-8 sequence, due to an error: %s", err.Error())
+				routineDone = true;
+				continue
+			}
+			if err = conn.WriteMessage(websocket.TextMessage, buffer.Bytes()); err != nil {
+				log.Printf("Failed to send websocket message: %s, due to occurred error %s", string(buffer.Bytes()), err.Error())
+				routineDone = true
+				continue
+			}
+			buffer.Reset()
+			if i < n {
+				buffer.Write(buf[i:n])
+			}
 		}
 	}
 }
@@ -220,7 +262,6 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Fatalf("Websocket upgrade failed: %s\n", err)
 	}
-	defer conn.Close()
 
 	wp, err := StartPty()
 	if err != nil {
@@ -229,17 +270,39 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	done := make(chan bool)
+	reader := ioutil.NopCloser(wp.PtyFile)
 
-	go sendPtyOutputToConnection(wp.PtyFile, conn, done)
-	go sendConnectionInputToPty(wp.PtyFile, conn, done)
+	go sendPtyOutputToConnection(conn, reader, done)
+	go sendConnectionInputToPty(conn, reader, wp.PtyFile, done)
+	//go waitStopProcess(wp, reader)
 
-	// Block until any routine finishes its work
-	<-done
+	<- done
+	<- done
 
-	// Close the pty file and kill the process after
-	// any of the routines finished its work, which enforces another
-	// go routine to complete and exit
+	//closeReader(reader, wp.PtyFile)
 	wp.Stop()
+	fmt.Println("main function complete 2")
+}
+
+//func waitStopProcess(wsPty *wsPty, reader io.ReadCloser) {
+//	if err := wsPty.Cmd.Wait(); err != nil {
+//		fmt.Println("Failed to stop process", err)
+//	}
+//	fmt.Println("process stopped")
+//
+//	closeReader(reader, wsPty.PtyFile)
+//
+//	wsPty.PtyFile.Close() //todo check error
+//}
+
+func closeReader(reader io.ReadCloser, file *os.File)  {
+	closeReaderErr := reader.Close()
+	if (closeReaderErr != nil) {
+		log.Printf("Failed to close reader %s\n" + closeReaderErr.Error())
+	}
+	//hack
+	file.Write([]byte("0"))
+	//todo check all error
 }
 
 func init() {
