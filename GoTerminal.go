@@ -36,9 +36,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"syscall"
-	//"sync"
-	//"os/signal"
-	"runtime"
 )
 
 type wsPty struct {
@@ -209,11 +206,8 @@ func sendPtyOutputToConnection(conn *websocket.Conn, reader io.ReadCloser, done 
 	buf := make([]byte, 8192)
 	var buffer bytes.Buffer
 
-	// TODO: more graceful exit on socket close / process exit
 	for  {
-		fmt.Println("*1")
 		n, err := reader.Read(buf)
-		fmt.Println("*2")
 		if err != nil {
 			if !isNormalPtyError(err) {
 				log.Printf("Failed to read from pty: %s", err)
@@ -256,10 +250,8 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 	go sendPtyOutputToConnection(conn, reader, done)
 	go sendConnectionInputToPty(conn, reader, wp.PtyFile, done)
 
-	fmt.Println(runtime.NumGoroutine())
-
 	if err := wp.Cmd.Wait(); err != nil {
-		fmt.Println("Failed to stop process", err)
+		log.Println("Failed to stop process", err)
 	}
 
 	if len(done) != 2 {
@@ -272,11 +264,12 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 func closeReader(reader io.ReadCloser, file *os.File)  {
 	closeReaderErr := reader.Close()
 	if (closeReaderErr != nil) {
-		log.Printf("Failed to close reader %s\n" + closeReaderErr.Error())
+		log.Println("Failed to close reader %s\n" + closeReaderErr.Error())
 	}
-	//hack
-	file.Write([]byte("0"))
-	//todo check all error
+	//hack to prevent suspend reader on the operation read when file is already close.
+	if _, err := file.Write([]byte("0")); err != nil {
+		log.Println("Failed to close pry file reader", err.Error())
+	}
 }
 
 func init() {
