@@ -1,28 +1,28 @@
 package main
 
 import (
-	"sync"
 	"fmt"
 )
 
-func main() {
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go read(&wg)
-	go write(&wg)
-
-
-	wg.Wait()
-	fmt.Println("all task completed")
-}
-
-func read(wg *sync.WaitGroup) {
-	defer wg.Done()
+func read(done chan bool) {
+	done <- true
 	fmt.Println("read done")
 }
 
-func write(wg *sync.WaitGroup)  {
-	defer wg.Done()
+func write(done chan bool)  {
+	done <- true
 	fmt.Println("write done")
 }
+
+
+func main() {
+	done := make(chan bool, 100)
+	for i := 0; i < 34; i++ {
+		done <- true
+	}
+	write(done)
+	read(done)
+
+	fmt.Println(len(done))
+}
+

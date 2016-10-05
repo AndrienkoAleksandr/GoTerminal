@@ -36,7 +36,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"syscall"
-	"sync"
+	//"sync"
+	//"os/signal"
+	"runtime"
 )
 
 type wsPty struct {
@@ -70,7 +72,7 @@ func StartPty() (*wsPty, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	fmt.Println(cmd.ProcessState)
 	//Set the size of the pty
 	pty.Setsize(file, 60, 200)
 
@@ -114,10 +116,10 @@ func isNormalPtyError(err error) bool {
 
 // read from the web socket, copying to the pty master
 // messages are expected to be text and base64 encoded
-func sendConnectionInputToPty(conn *websocket.Conn, reader io.ReadCloser, f *os.File, done chan bool, wg *sync.WaitGroup) {
+func sendConnectionInputToPty(conn *websocket.Conn, reader io.ReadCloser, f *os.File, done chan bool) {
 	defer func() {
 		closeReader(reader, f)
-		wg.Done()
+		done <- true
 		fmt.Println("write completed")
 	}()
 	for {
@@ -197,10 +199,10 @@ func normalizeBuffer(normalizedBuf *bytes.Buffer, buf []byte, n int) (int, error
 
 // copy everything from the pty master to the websocket
 // using base64 encoding for now due to limitations in term.js
-func sendPtyOutputToConnection(conn *websocket.Conn, reader io.ReadCloser, done chan bool, wg *sync.WaitGroup) {
+func sendPtyOutputToConnection(conn *websocket.Conn, reader io.ReadCloser, done chan bool) {
 	defer func() {
 		conn.Close()
-		wg.Done()
+		done <- true
 		fmt.Println("read completed")
 	}()
 
@@ -247,33 +249,24 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	done := make(chan bool)
-	var wg sync.WaitGroup
-	wg.Add(2)
-
 	reader := ioutil.NopCloser(wp.PtyFile)
 
-	go sendPtyOutputToConnection(conn, reader, done, &wg)
-	go sendConnectionInputToPty(conn, reader, wp.PtyFile, done, &wg)
-	go waitStopProcess(wp, reader)
+	done := make(chan bool, 2)
 
-	wg.Wait()
+	go sendPtyOutputToConnection(conn, reader, done)
+	go sendConnectionInputToPty(conn, reader, wp.PtyFile, done)
 
-	wp.Stop()//todo defer please
-	fmt.Println("main function complete")
-}
+	fmt.Println(runtime.NumGoroutine())
 
-func waitStopProcess(wsPty *wsPty, reader io.ReadCloser) {
-	if err := wsPty.Cmd.Wait(); err != nil {
+	if err := wp.Cmd.Wait(); err != nil {
 		fmt.Println("Failed to stop process", err)
 	}
-	fmt.Println("wait completed")
-	//
-	//closeReader(reader, wsPty.PtyFile)
-	//
-	//if err := wsPty.PtyFile.Close(); err != nil {
-	//	fmt.Print("Failed to close pty file " + err.Error())
-	//}
+
+	if len(done) != 2 {
+		conn.Close()
+	}
+
+	fmt.Println("main function complete")
 }
 
 func closeReader(reader io.ReadCloser, file *os.File)  {
