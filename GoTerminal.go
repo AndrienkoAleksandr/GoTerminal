@@ -88,7 +88,7 @@ func (wp *wsPty) Stop() {
 	if waitErr := wp.Cmd.Wait(); waitErr != nil {
 		log.Println("Failed to wait process stopping", waitErr.Error())
 	}
-
+	fmt.Println("stop complete")
 }
 
 func isNormalWsError(err error) bool {
@@ -114,19 +114,20 @@ func isNormalPtyError(err error) bool {
 // read from the web socket, copying to the pty master
 // messages are expected to be text and base64 encoded
 func sendConnectionInputToPty(conn *websocket.Conn, reader io.ReadCloser, f *os.File, done chan bool) {
-	defer fmt.Println("write completed")
+	defer func() {
+		closeReader(reader, f)
+		done <- true
+		fmt.Println("write completed")
+	}()
 	routineDone := false
 	for {
 		select {
 		case <- done:
-			close(done)
+			fmt.Println("WHAT!1")
 			return
 		default:
 			if routineDone {
-				closeReader(reader, f)
-				fmt.Println("writer actually here")
-				done <- true
-				fmt.Println("writer actually here2")
+
 				return
 			}
 			mt, payload, err := conn.ReadMessage()
@@ -158,7 +159,6 @@ func sendConnectionInputToPty(conn *websocket.Conn, reader io.ReadCloser, f *os.
 				continue
 			}
 		}
-
 	}
 }
 
@@ -212,7 +212,11 @@ func normalizeBuffer(normalizedBuf *bytes.Buffer, buf []byte, n int) (int, error
 // copy everything from the pty master to the websocket
 // using base64 encoding for now due to limitations in term.js
 func sendPtyOutputToConnection(conn *websocket.Conn, reader io.ReadCloser, done chan bool) {
-	defer fmt.Println("read completed")
+	defer func() {
+		conn.Close()
+		done <- true;
+		fmt.Println("read completed")
+	}()
 
 	routineDone := false
 	buf := make([]byte, 8192)
@@ -222,14 +226,11 @@ func sendPtyOutputToConnection(conn *websocket.Conn, reader io.ReadCloser, done 
 	for  {
 		select {
 		case <- done:
-			close(done)
+			fmt.Println("WHAT!2")
 			return
 		default:
 			if routineDone {
-				fmt.Println("here")
-				conn.Close()
-				done <- true;
-				fmt.Println("here2")
+
 				return
 			}
 			fmt.Println("*1")
@@ -275,6 +276,7 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	done := make(chan bool)
+
 	reader := ioutil.NopCloser(wp.PtyFile)
 
 	go sendPtyOutputToConnection(conn, reader, done)
