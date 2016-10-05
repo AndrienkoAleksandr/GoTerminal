@@ -247,7 +247,9 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 
 	done := make(chan bool, 2)
 
+	//read output from terminal
 	go sendPtyOutputToConnection(conn, reader, done)
+	//write input to terminal
 	go sendConnectionInputToPty(conn, reader, wp.PtyFile, done)
 
 	if err := wp.Cmd.Wait(); err != nil {
