@@ -119,45 +119,30 @@ func sendConnectionInputToPty(conn *websocket.Conn, reader io.ReadCloser, f *os.
 		done <- true
 		fmt.Println("write completed")
 	}()
-	routineDone := false
 	for {
-		select {
-		case <- done:
-			fmt.Println("WHAT!1")
+		mt, payload, err := conn.ReadMessage()
+		if err != nil {
+			if !isNormalWsError(err) {
+				log.Printf("conn.ReadMessage failed: %s\n", err)
+			}
 			return
-		default:
-			if routineDone {
-
+		}
+		switch mt {
+		case websocket.BinaryMessage:
+			log.Printf("Ignoring binary message: %q\n", payload)
+		case websocket.TextMessage:
+			var msg WebSocketMessage
+			if err := json.Unmarshal(payload, &msg); err != nil {
+				log.Printf("Invalid message %s\n", err)
+				continue
+			}
+			if errMsg := handleMessage(msg, f); errMsg != nil {
+				log.Printf(errMsg.Error())
 				return
 			}
-			mt, payload, err := conn.ReadMessage()
-			if err != nil {
-				if !isNormalWsError(err) {
-					log.Printf("conn.ReadMessage failed: %s\n", err)
-				}
-				routineDone = true
-				continue
-			}
-			switch mt {
-			case websocket.BinaryMessage:
-				log.Printf("Ignoring binary message: %q\n", payload)
-			case websocket.TextMessage:
-				var msg WebSocketMessage
-				if err := json.Unmarshal(payload, &msg); err != nil {
-					log.Printf("Invalid message %s\n", err)
-					continue
-				}
-				if errMsg := handleMessage(msg, f); errMsg != nil {
-					log.Printf(errMsg.Error())
-					routineDone = true
-					continue
-				}
-
-			default:
-				log.Printf("Invalid websocket message type %d\n", mt)
-				routineDone = true
-				continue
-			}
+		default:
+			log.Printf("Invalid websocket message type %d\n", mt)
+			return
 		}
 	}
 }
@@ -218,47 +203,33 @@ func sendPtyOutputToConnection(conn *websocket.Conn, reader io.ReadCloser, done 
 		fmt.Println("read completed")
 	}()
 
-	routineDone := false
 	buf := make([]byte, 8192)
 	var buffer bytes.Buffer
 
 	// TODO: more graceful exit on socket close / process exit
 	for  {
-		select {
-		case <- done:
-			fmt.Println("WHAT!2")
+		fmt.Println("*1")
+		n, err := reader.Read(buf)
+		fmt.Println("*2")
+		if err != nil {
+			if !isNormalPtyError(err) {
+				log.Printf("Failed to read from pty: %s", err)
+			}
 			return
-		default:
-			if routineDone {
+		}
 
-				return
-			}
-			fmt.Println("*1")
-			n, err := reader.Read(buf)
-			fmt.Println("*2")
-			if err != nil {
-				if !isNormalPtyError(err) {
-					log.Printf("Failed to read from pty: %s", err)
-				}
-				routineDone = true
-				continue
-			}
-
-			i, err := normalizeBuffer(&buffer, buf, n)
-			if err != nil {
-				log.Printf("Cound't normalize byte buffer to UTF-8 sequence, due to an error: %s", err.Error())
-				routineDone = true;
-				continue
-			}
-			if err = conn.WriteMessage(websocket.TextMessage, buffer.Bytes()); err != nil {
-				log.Printf("Failed to send websocket message: %s, due to occurred error %s", string(buffer.Bytes()), err.Error())
-				routineDone = true
-				continue
-			}
-			buffer.Reset()
-			if i < n {
-				buffer.Write(buf[i:n])
-			}
+		i, err := normalizeBuffer(&buffer, buf, n)
+		if err != nil {
+			log.Printf("Cound't normalize byte buffer to UTF-8 sequence, due to an error: %s", err.Error())
+			return
+		}
+		if err = conn.WriteMessage(websocket.TextMessage, buffer.Bytes()); err != nil {
+			log.Printf("Failed to send websocket message: %s, due to occurred error %s", string(buffer.Bytes()), err.Error())
+			return
+		}
+		buffer.Reset()
+		if i < n {
+			buffer.Write(buf[i:n])
 		}
 	}
 }
