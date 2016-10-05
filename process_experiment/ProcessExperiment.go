@@ -3,7 +3,7 @@ package main
 import "fmt"
 import (
 	"os"
-	"syscall"
+	//"syscall"
 )
 //import "syscall"
 
