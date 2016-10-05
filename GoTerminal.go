@@ -35,7 +35,6 @@ import (
 	"unicode/utf8"
 	"fmt"
 	"io/ioutil"
-	"syscall"
 )
 
 type wsPty struct {
@@ -63,13 +62,12 @@ func StartPty() (*wsPty, error) {
 	// TODO consider whether these args are needed at all
 	cmd := exec.Command(cmdFlag, flag.Args()...)
 	cmd.Env = append(os.Environ(), "TERM=xterm")
-	//cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	file, err := pty.Start(cmd)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println(cmd.ProcessState)
+
 	//Set the size of the pty
 	pty.Setsize(file, 60, 200)
 
@@ -77,18 +75,6 @@ func StartPty() (*wsPty, error) {
 		PtyFile: file,
 		Cmd:     cmd,
 	}, nil
-}
-
-func (wp *wsPty) Stop() {
-	//wp.PtyFile.Close();//todo maybe move that down
-	//kill parent process, but not children processes
-	if killErr := syscall.Kill(wp.Cmd.Process.Pid, syscall.SIGBUS); killErr != nil {
-		log.Println("Failed to kill process", killErr.Error())
-	}
-	//if waitErr := wp.Cmd.Wait(); waitErr != nil {
-	//	log.Println("Failed to wait process stopping", waitErr.Error())
-	//}
-	fmt.Println("stop complete")
 }
 
 func isNormalWsError(err error) bool {
@@ -117,7 +103,7 @@ func sendConnectionInputToPty(conn *websocket.Conn, reader io.ReadCloser, f *os.
 	defer func() {
 		closeReader(reader, f)
 		done <- true
-		fmt.Println("write completed")
+		fmt.Println("write completed")//todo remove this test line
 	}()
 	for {
 		mt, payload, err := conn.ReadMessage()
@@ -200,13 +186,13 @@ func sendPtyOutputToConnection(conn *websocket.Conn, reader io.ReadCloser, done 
 	defer func() {
 		conn.Close()
 		done <- true
-		fmt.Println("read completed")
+		fmt.Println("read completed")//todo remove this test line
 	}()
 
 	buf := make([]byte, 8192)
 	var buffer bytes.Buffer
 
-	for  {
+	for {
 		n, err := reader.Read(buf)
 		if err != nil {
 			if !isNormalPtyError(err) {
@@ -244,7 +230,6 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reader := ioutil.NopCloser(wp.PtyFile)
-
 	done := make(chan bool, 2)
 
 	//read output from terminal
@@ -253,24 +238,28 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 	go sendConnectionInputToPty(conn, reader, wp.PtyFile, done)
 
 	if err := wp.Cmd.Wait(); err != nil {
-		log.Println("Failed to stop process", err)
+		log.Printf("Failed to stop process, due to occurred error '%s'", err.Error())
 	}
 
 	if len(done) != 2 {
 		conn.Close()
 	}
 
-	fmt.Println("main function complete")
+	if errClosePtyFile := wp.PtyFile.Close(); errClosePtyFile != nil {
+		log.Printf("Failed to close pty file, due to occurred error '%s'", err.Error())
+	}
+
+	fmt.Println("main function complete")//todo remove this test line
 }
 
-func closeReader(reader io.ReadCloser, file *os.File)  {
+func closeReader(reader io.ReadCloser, file *os.File) {
 	closeReaderErr := reader.Close()
 	if (closeReaderErr != nil) {
-		log.Println("Failed to close reader %s\n" + closeReaderErr.Error())
+		log.Printf("Failed to close pty file reader '%s'" + closeReaderErr.Error())
 	}
-	//hack to prevent suspend reader on the operation read when file is already close.
+	//hack to prevent suspend reader on the operation read when file has been already closed.
 	if _, err := file.Write([]byte("0")); err != nil {
-		log.Println("Failed to close pry file reader", err.Error())
+		log.Printf("Failed to write to pty file '%s'", err.Error())
 	}
 }
 
