@@ -63,6 +63,7 @@ func StartPty() (*wsPty, error) {
 	// TODO consider whether these args are needed at all
 	cmd := exec.Command(cmdFlag, flag.Args()...)
 	cmd.Env = append(os.Environ(), "TERM=xterm")
+	//cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	file, err := pty.Start(cmd)
 	if err != nil {
@@ -81,9 +82,13 @@ func StartPty() (*wsPty, error) {
 func (wp *wsPty) Stop() {
 	//wp.PtyFile.Close();//todo maybe move that down
 	//kill parent process, but not children processes
-	syscall.Kill(wp.Cmd.Process.Pid, syscall.SIGBUS)
-	wp.Cmd.Wait()
-	fmt.Println("process stopped")
+	if killErr := syscall.Kill(wp.Cmd.Process.Pid, syscall.SIGBUS); killErr != nil {
+		log.Println("Failed to kill process", killErr.Error())
+	}
+	if waitErr := wp.Cmd.Wait(); waitErr != nil {
+		log.Println("Failed to wait process stopping", waitErr.Error())
+	}
+
 }
 
 func isNormalWsError(err error) bool {
@@ -284,16 +289,16 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("main function complete 2")
 }
 
-//func waitStopProcess(wsPty *wsPty, reader io.ReadCloser) {
-//	if err := wsPty.Cmd.Wait(); err != nil {
-//		fmt.Println("Failed to stop process", err)
-//	}
-//	fmt.Println("process stopped")
-//
-//	closeReader(reader, wsPty.PtyFile)
-//
-//	wsPty.PtyFile.Close() //todo check error
-//}
+func waitStopProcess(wsPty *wsPty, reader io.ReadCloser) {
+	if err := wsPty.Cmd.Wait(); err != nil {
+		fmt.Println("Failed to stop process", err)
+	}
+	fmt.Println("process completed")
+
+	closeReader(reader, wsPty.PtyFile)
+
+	wsPty.PtyFile.Close() //todo check error
+}
 
 func closeReader(reader io.ReadCloser, file *os.File)  {
 	closeReaderErr := reader.Close()
