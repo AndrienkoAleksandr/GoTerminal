@@ -241,8 +241,9 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failed to stop process, due to occurred error '%s'", err.Error())
 	}
 
-	if len(done) != 2 {
+	if len(done) < 2 {
 		conn.Close()
+		closeReader(reader, wp.PtyFile)
 	}
 
 	if errClosePtyFile := wp.PtyFile.Close(); errClosePtyFile != nil {
